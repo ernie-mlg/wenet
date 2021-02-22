@@ -5,13 +5,12 @@ import logging
 import torch
 from torch.nn.utils import clip_grad_norm_
 
-
 class Executor:
     def __init__(self):
         self.step = 0
 
     def train(self, model, optimizer, scheduler, data_loader, device, writer,
-              args):
+              args, is_distributed):
         ''' Train one epoch
         '''
         model.train()
@@ -35,7 +34,17 @@ class Executor:
             loss, loss_att, loss_ctc = model(feats, feats_lengths, target,
                                              target_lengths)
             loss = loss / accum_grad
-            loss.backward()
+            # Disable gradient synchronizations across DDP processes. 
+            # Within this context, gradients will be accumulated on module
+            # variables, which will later be synchronized.
+            if batch_idx % accum_grad != 0 and is_distributed:
+                with model.no_sync():
+                    loss.backward()
+            # Used for single gpu training and DDP gradient synchronization
+            # processes.
+            else:
+                loss.backward()
+
             num_seen_utts += num_utts
             if batch_idx % accum_grad == 0:
                 if rank == 0 and writer is not None:
